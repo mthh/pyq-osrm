@@ -32,8 +32,8 @@
 ## in order to build a matrice of time/route_distance/euclidian_distance
 ## between a set of locations (centroid of city for example).
 ##
-## The set of location must be provided in .csv as:
-##
+## The set of location must be provided in .csv (first line as headers) as:
+## Lat_column,Long_column,Name_column
 ## lat,long,name_of_the_place1
 ## lat,long,name_of_the_place2
 ## .......
@@ -192,36 +192,50 @@ def csv_to_dico_liste(file_path):
     coord_liste = []
     with open(file_path, 'r') as file:
         reader = csv.reader(file)
-        for row in reader:
-            concat = row[0] + ',' + row[1]
-            coord_liste.append(concat)
-            my_dict[concat] = row[2]
+        try:
+            for row in reader:
+                if reader.line_num is not 1:
+                    concat = row[0] + ',' + row[1]
+                    coord_liste.append(concat)
+                    my_dict[concat] = row[2]
+        except csv.Error as er:
+            sys.exit('Erreur dans la lecture du fichier csv : file {}, line {}: {}'.format(file_path, reader.line_num, er))
     return my_dict, coord_liste
 
 
 if __name__ == '__main__':
-    if (len(sys.argv) < 3) or ('-h' in sys.argv) or ('.csv' not in str(sys.argv[1])[len(sys.argv[1]) - 4:]) or (
-                len(sys.argv) > 4):
-        print(
-            "\npyq-OSRM :\n\nUsage :\n> {0} input_file.csv output_file_name\n".format(
-                os.path.basename(str(sys.argv[0]))))
-        sys.exit(0)
-
-    nom_fichier = str(sys.argv[1])
+    import argparse
+    parser=argparse.ArgumentParser(description="pyq-osrm :\nPython script to query local osrm server and provide output as .shp")
+    parser.add_argument(type=str, action='store', dest="csv_filename", default="", help=".csv file to open")
+    parser.add_argument('-m', '--one-to-many', dest='one', action='store_true', default=False, help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
+    parser.add_argument('-o', '--output', dest='out_filename', action='store', default="", help="Change output name file (default : same name as the csv)")
+    args = parser.parse_args()
+    
+    if args.csv_filename:
+        if '.csv' not in (str(args.csv_filename)[len(args.csv_filename)-4:]):
+            print("Filename error")
+            sys.exit(0)
+    else:
+        print("\npyq-OSRM :\n\nErreur lors de l'ouverture du fichier\n")
+        sys.exit(0)        
+    nom_fichier=args.csv_filename
+    
     if os.path.isfile(nom_fichier) is False:
         print("\npyq-OSRM :\n\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)
-
+        
     dico, liste_ord = csv_to_dico_liste(nom_fichier)
     coord_liste_s = []
     coord_liste_t = []
-    for i in liste_ord:
-        coord_liste_t.append(i)
-    try:
-        if '-m' in str(sys.argv[3]):
-            coord_liste_s.append(coord_liste_t[0])
-            print("Test mode 1-to-Many\n")
-    except:
+    for i in liste_ord: coord_liste_t.append(i)
+    
+    if args.one:
+        coord_liste_s.append(coord_liste_t[0])
+        print("Test mode 1-to-Many\n")
+    else:
         coord_liste_s = coord_liste_t
 
-    query_osrm_to_shp(dico, coord_liste_s, coord_liste_t, str(sys.argv[2]))
+    if args.out_filename: outfile=args.out_filename
+    else: outfile=nom_fichier[:len(args.csv_filename)-4]
+
+    query_osrm_to_shp(dico, coord_liste_s, coord_liste_t, outfile)
