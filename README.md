@@ -21,4 +21,7 @@ or
 This script also allow you to make only a '1-to-many' calcul. The first location in the .csv file will be the only source point and others will be all the destinations. Just add the -m parameter at the end :
 >	pyqOSRM.py input_file.csv -m
 
+It is also possible to do the opposite calculation (many-to-one) by using the parameter -t :
+> pyqOSRM.py input_file.csv -t
+
 Feel free to make any comment, this script is in its very early stage of development (many errors/exeptions are probably not yet handled).
