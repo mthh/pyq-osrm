@@ -207,7 +207,8 @@ if __name__ == '__main__':
     import argparse
     parser=argparse.ArgumentParser(description="pyq-osrm :\nPython script to query local osrm server and provide output as .shp")
     parser.add_argument(type=str, action='store', dest="csv_filename", default="", help=".csv file to open")
-    parser.add_argument('-m', '--one-to-many', dest='one', action='store_true', default=False, help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
+    parser.add_argument('-m', '--one-to-many', dest='one_t', action='store_true', default=False, help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
+    parser.add_argument('-t', '--many-to-one', dest='many_t', action='store_true', default=False, help="Calcul the fastest route between many sources locations and 1 same destination (default : Calcul fastest route between every locations provided in the dataset)")
     parser.add_argument('-o', '--output', dest='out_filename', action='store', default="", help="Change output name file (default : same name as the csv)")
     args = parser.parse_args()
     
@@ -229,9 +230,13 @@ if __name__ == '__main__':
     coord_liste_t = []
     for i in liste_ord: coord_liste_t.append(i)
     
-    if args.one:
+    if args.one_t:
         coord_liste_s.append(coord_liste_t[0])
         print("Test mode 1-to-Many\n")
+    elif args.many_t:
+        coord_liste_s.append(coord_liste_t[0])
+        coord_liste_s, coord_liste_t = coord_liste_t, coord_liste_s
+        print("Test mode Many-to-1\n")
     else:
         coord_liste_s = coord_liste_t
 
