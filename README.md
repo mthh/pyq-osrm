@@ -8,10 +8,10 @@ It's a simple try to replicate the "http://localhost:5000/table?..." request (it
 
 ## Requirement
 Some python modules are needed :
--Polyline
--Osgeo
--Urllib
--Simanneal (only for the TSP script)
+* Polyline
+* Osgeo
+* Urllib
+* Simanneal (only for the TSP script)
 
 ## Usage 
 The input file must be a csv file (first line as headers) with comma separator in this format :
