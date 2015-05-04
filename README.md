@@ -39,7 +39,7 @@ As in the first script, the input file must be a list of every locations in .csv
 > pyq-osrm-tsp.py input-file.csv -o output_filename
 
 OSRM server has limitation concerning the number of locations supported in distance table query (default=100).
-It can be raised when lauching the local server with argument –max-table-size, for example :
-> osrm-routed.exe file.osrm –max-table-size=1234
+It can be raised when lauching the local server with argument --max-table-size, for example :
+> osrm-routed.exe file.osrm --max-table-size=1234
 
 Feel free to make any comment, this script is in its very early stage of development (many errors/exeptions are probably not yet handled).
