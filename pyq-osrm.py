@@ -1,5 +1,5 @@
 # -*-coding:utf-8 -*
-##
+
 ##    The MIT License (MIT)
 ##
 ##    « Copyright (c) 2015, mthh
@@ -21,12 +21,15 @@
 ##    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 ##    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 ##    SOFTWARE.
-##
+
+
 ##-----------------------------------------------------------------------------------
 ## pyq-OSRM:
 ##-----------------------------------------------------------------------------------
-## - N to N route calcul with OSRM local server
-## - 1 to N route calcul with OSRM local server
+##   N to N  |
+##   1 to N  | matrix of route (distance and time distance) between locations
+##   N to 1  |
+##   N to M  |
 ##-----------------------------------------------------------------------------------
 ## This script send multiple requests to an osrm local server
 ## in order to build a matrice of time/route_distance/euclidian_distance
@@ -39,13 +42,12 @@
 ## .......
 ##
 ## Output is a shapefile containing the geometry of the fastest route,
-## the time in tenth of second, route distance in meters and euclidian
+## the time in seconds, route distance in meters and euclidian
 ## distance between the 2 locations in meters.
-##
+
 ##-----------------------------------------------------------------------------------
 ## Usage :
 ##   try --help to get some help
-#########################################
 
 
 import json
@@ -57,11 +59,17 @@ import pyproj  # Python interface to PROJ.4 library
 import csv
 import sys
 import os.path
+import numpy as np
 
 
 def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
     """Fonction qui prend en entrée un dictionnaire de {coordonnées:noms} et les les listes de coordonées
     puis envoie les requetes au serveur OSRM et enregistre le résultat dans le fichier de sortie indiqué(.shp)"""
+
+    # Création des matrices à remplir
+    matrice_time = np.zeros([len(coord_liste_s), len(coord_liste_t)])
+    matrice_distance = np.zeros([len(coord_liste_s), len(coord_liste_t)])
+    matrice_euclidian_distance =np.zeros([len(coord_liste_s), len(coord_liste_t)])
 
     # Syst de coord. a adopter pour écrire le fichier shp
     spatialreference = osr.SpatialReference()
@@ -73,7 +81,8 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
     # Définition du type du fichier de sortie..
     driver = ogr.GetDriverByName("ESRI Shapefile")
     # ..et vérification de son nom
-    if '.shp' not in dstpath[len(dstpath) - 4:]: dstpath = dstpath + '.shp'
+    if '.shp' not in dstpath[len(dstpath) - 4:]:
+        dstpath = dstpath + '.shp'
 
     try:
         dstfile = driver.CreateDataSource(dstpath)
@@ -110,10 +119,14 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
     print("\npyq-OSRM :\n\n {0} routes to calculate\n".format(len(coord_liste_s) * len(coord_liste_t)))
     testit = 0
     error = 0
-    for source in coord_liste_s:
-        for target in coord_liste_t:
+    matrice_time_dic = {}
+    for a, source in enumerate(coord_liste_s):
+        src_name = str(dict_coord[source])
+        matrice_time_dic[src_name] = {}
+        for b, target in enumerate(coord_liste_t):
+            tgt_name = str(dict_coord[target])
             # Préparation de la requete au serveur osrm, envoi et récupération de la réponse
-            url_query = 'http://localhost:5000/viaroute?loc={0}&loc={1}'.format(source, target)
+            url_query = 'http://localhost:5000/viaroute?loc={0}&loc={1}&instructions=false&alt=false'.format(source, target)
             try:
                 ajson = urllib.request.urlopen(url_query)
             except:
@@ -123,9 +136,12 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
             # Lecture des résultats (bytes) en json
             json_entry = ajson.readall().decode('utf-8')
             parsed_json = json.loads(json_entry)
+            
+            # Calcul de la distance à vol d'oiseau entre l'origine et la destination du parcours
+            angle1, angle2, distance_eucl = geod.inv(source[source.find(',') + 1:], source[:source.find(',')],
+                                                     target[target.find(',') + 1:], target[:target.find(',')])
+            distance_eucl = int(distance_eucl)
 
-            src_name = str(dict_coord[source])
-            tgt_name = str(dict_coord[target])
 
             if parsed_json['status'] is not 207:  # Verification qu'une route a bien été trouvée par OSRM
 
@@ -134,11 +150,12 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
                 total_time_osrm = parsed_json['route_summary']['total_time']
                 total_distance_osrm = parsed_json['route_summary']['total_distance']
 
-                # Calcul de la distance à vol d'oiseau entre l'origine et la destination du parcours
-                angle1, angle2, distance_eucl = geod.inv(source[source.find(',') + 1:], source[:source.find(',')],
-                                                         target[target.find(',') + 1:], target[:target.find(',')])
-                distance_eucl = int(distance_eucl)
-
+                # Remplissage des matrices:
+                matrice_time[a][b]=total_time_osrm
+                matrice_distance[a][b]=total_distance_osrm
+                matrice_euclidian_distance[a][b]=distance_eucl
+                matrice_time_dic[src_name][tgt_name]=total_time_osrm
+                
                 # Décodage de la géométrie pour obtenir la liste des points composants la ligne
                 epa_dec = PolylineCodec().decode(epa_osrm)
                 fausse_liste = str(epa_dec)
@@ -157,11 +174,10 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
                     else:
                         print("Error while getting node coordinates\n")
 
-                # print("Processing.. #{0}  {1}".format(testit,url_query))
                 if int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)) % 5 == 0: print(
                     "Processing.... {0}%".format(int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100))))
 
-                for j in range(len(lat) - 1):  # Ajout des points à la future ligne...
+                for j in range(len(lat)):  # Ajout des points à la future ligne...
                     ma_ligne.AddPoint(float(long[j]) / 10,
                                       float(lat[j]) / 10)  # ...sous la forme x y (longitude latitude)...
 
@@ -177,12 +193,20 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
                 feature.SetField("Tgt_name", tgt_name)
                 dstlayer.CreateFeature(feature)
                 testit += 1
+
             else:
                 error += 1
                 print(
                     "Err #{0}  : OSRM status 207 - No route found between {1} and {2}".format(error, src_name,
                                                                                               tgt_name))
-    print("  {0} route(s) calculations failed - {1} lines created in a shapefile".format(error, testit))
+                # Remplissage matrice en cas d'erreur:
+                matrice_time[a][b]=-1
+                matrice_distance[a][b]=-1
+                matrice_euclidian_distance[a][b]=distance_eucl
+                
+    if error > 0 :
+        print("\t{0} route(s) calculations failed".format(error))
+    print("\t{0} lines created in a shapefile".format(testit))
     feature.Destroy()
     dstfile.Destroy()
 
@@ -207,9 +231,14 @@ if __name__ == '__main__':
     import argparse
     parser=argparse.ArgumentParser(description="pyq-osrm :\nPython script to query local osrm server and provide output as .shp")
     parser.add_argument(type=str, action='store', dest="csv_filename", default="", help=".csv file to open")
-    parser.add_argument('-m', '--one-to-many', dest='one_t', action='store_true', default=False, help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
-    parser.add_argument('-t', '--many-to-one', dest='many_t', action='store_true', default=False, help="Calcul the fastest route between many sources locations and 1 same destination (default : Calcul fastest route between every locations provided in the dataset)")
-    parser.add_argument('-o', '--output', dest='out_filename', action='store', default="", help="Change output name file (default : same name as the csv)")
+    parser.add_argument('-m', '--one-to-many', dest='one_t', action='store_true', default=False,
+                        help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
+    parser.add_argument('-t', '--many-to-one', dest='many_t', action='store_true', default=False,
+                        help="Calcul the fastest route between many sources locations and 1 same destination (default : Calcul fastest route between every locations provided in the dataset)")
+    parser.add_argument('-d', '--different', dest='destinations_csv', action='store', default="",
+                        help="Different origins and destinations (put .csv file of destinations after this argument)")
+    parser.add_argument('-o', '--output', dest='out_filename', action='store', default="",
+                        help="Change output name file (default : same name as the csv)")
     args = parser.parse_args()
     
     if args.csv_filename:
@@ -217,30 +246,34 @@ if __name__ == '__main__':
             print("Filename error")
             sys.exit(0)
     else:
-        print("\npyq-OSRM :\n\nErreur lors de l'ouverture du fichier\n")
+        print("\n\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)        
     nom_fichier=args.csv_filename
     
     if os.path.isfile(nom_fichier) is False:
-        print("\npyq-OSRM :\n\nErreur lors de l'ouverture du fichier\n")
+        print("\n\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)
         
     dico, liste_ord = csv_to_dico_liste(nom_fichier)
-    coord_liste_s = []
     coord_liste_t = []
-    for i in liste_ord: coord_liste_t.append(i)
-    
-    if args.one_t:
-        coord_liste_s.append(coord_liste_t[0])
-        print("Test mode 1-to-Many\n")
-    elif args.many_t:
-        coord_liste_s.append(coord_liste_t[0])
-        coord_liste_s, coord_liste_t = coord_liste_t, coord_liste_s
-        print("Test mode Many-to-1\n")
-    else:
-        coord_liste_s = coord_liste_t
 
     if args.out_filename: outfile=args.out_filename
     else: outfile=nom_fichier[:len(args.csv_filename)-4]
+    
+    if args.one_t:
+        coord_liste_t.append(liste_ord[0])
+        liste_ord, coord_liste_t = coord_liste_t, liste_ord
+        print("\nMode 1-to-Many\n")
+    elif args.many_t:
+        coord_liste_t.append(liste_ord[0])
+        print("\nMode Many-to-1\n")
+    elif args.destinations_csv:
+        dico_suite, liste_ord_d = csv_to_dico_liste(args.destinations_csv)
+        dico.update(dico_suite)
+        print("\nTest Mode N-to-M\n")
+        print("{0}\n{1}\{2}\n{3}".format(dico,coord_liste_t, liste_ord_d, outfile))
+        coord_liste_t = liste_ord_d
+    else:
+        coord_liste_t = liste_ord
 
-    query_osrm_to_shp(dico, coord_liste_s, coord_liste_t, outfile)
+    query_osrm_to_shp(dico, liste_ord, coord_liste_t, outfile)
