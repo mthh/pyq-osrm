@@ -22,7 +22,6 @@
 ##    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 ##    SOFTWARE.
 
-
 ##-----------------------------------------------------------------------------------
 ## pyq-OSRM:
 ##-----------------------------------------------------------------------------------
@@ -49,27 +48,25 @@
 ## Usage :
 ##   try --help to get some help
 
-
 import json
-from osgeo import ogr
-from osgeo import osr
+from osgeo import ogr, osr
 from polyline.codec import PolylineCodec  # https://pypi.python.org/pypi/polyline
 import urllib.request
 import pyproj  # Python interface to PROJ.4 library
 import csv
 import sys
 import os.path
-import numpy as np
+from os import remove as removefile
+from time import time
 
+def range2d(liste1, liste2):
+    for nbi, i in enumerate(liste1):
+        for nbj, j in enumerate(liste2):
+            yield nbi, i, nbj, j
 
 def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
-    """Fonction qui prend en entrée un dictionnaire de {coordonnées:noms} et les les listes de coordonées
+    """Fonction qui prend en entrée un dictionnaire de {coordonnées:noms} et les listes de coordonées
     puis envoie les requetes au serveur OSRM et enregistre le résultat dans le fichier de sortie indiqué(.shp)"""
-
-    # Création des matrices à remplir
-    matrice_time = np.zeros([len(coord_liste_s), len(coord_liste_t)])
-    matrice_distance = np.zeros([len(coord_liste_s), len(coord_liste_t)])
-    matrice_euclidian_distance =np.zeros([len(coord_liste_s), len(coord_liste_t)])
 
     # Syst de coord. a adopter pour écrire le fichier shp
     spatialreference = osr.SpatialReference()
@@ -85,6 +82,8 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
         dstpath = dstpath + '.shp'
 
     try:
+        if os.path.exists(dstpath):
+            removefile(dstpath)
         dstfile = driver.CreateDataSource(dstpath)
         dstlayer = dstfile.CreateLayer("layer", spatialreference)
     except:
@@ -116,100 +115,81 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
     fielddef.SetWidth(128)
     dstlayer.CreateField(fielddef)
 
-    print("\npyq-OSRM :\n\n {0} routes to calculate\n".format(len(coord_liste_s) * len(coord_liste_t)))
-    testit = 0
-    error = 0
-    matrice_time_dic = {}
-    for a, source in enumerate(coord_liste_s):
-        src_name = str(dict_coord[source])
-        matrice_time_dic[src_name] = {}
-        for b, target in enumerate(coord_liste_t):
-            tgt_name = str(dict_coord[target])
-            # Préparation de la requete au serveur osrm, envoi et récupération de la réponse
-            url_query = 'http://localhost:5000/viaroute?loc={0}&loc={1}&instructions=false&alt=false'.format(source, target)
-            try:
-                ajson = urllib.request.urlopen(url_query)
-            except:
-                print("\npyq-OSRM :\nErreur lors du passage de l'URL\n")
-                sys.exit(0)
+    print("\npyq-OSRM : {0} routes to calculate".format(len(coord_liste_s) * len(coord_liste_t)))
+    testit, error = 0, 0
+ 
+    for a, source, b, target in range2d(coord_liste_s, coord_liste_t):           
+        src_name = dict_coord[source]
+        tgt_name = dict_coord[target]
+        # Préparation de la requete au serveur osrm, envoi et récupération de la réponse
+        url_query = 'http://localhost:5000/viaroute?loc={0}&loc={1}&instructions=false&alt=false'.format(source, target)
+        try:
+            ajson = urllib.request.urlopen(url_query)
+        except:
+            print("\npyq-OSRM :\nErreur lors du passage de l'URL\n")
+            sys.exit(0)
 
-            # Lecture des résultats (bytes) en json
-            json_entry = ajson.readall().decode('utf-8')
-            parsed_json = json.loads(json_entry)
+        # Lecture des résultats (bytes) en json
+        json_entry = ajson.readall().decode('utf-8')
+        parsed_json = json.loads(json_entry)
+        
+        # Calcul de la distance à vol d'oiseau entre l'origine et la destination du parcours
+        angle1, angle2, distance_eucl = geod.inv(source[source.find(',') + 1:], source[:source.find(',')],
+                                                 target[target.find(',') + 1:], target[:target.find(',')])
+        distance_eucl = int(distance_eucl)
+
+        if parsed_json['status'] is not 207:  # Verification qu'une route a bien été trouvée par OSRM
+            # Récupération des infos intéressantes dont la géométrie au format encoded polyline algorythm
+            epa_osrm = parsed_json['route_geometry']
+            total_time_osrm = parsed_json['route_summary']['total_time']
+            total_distance_osrm = parsed_json['route_summary']['total_distance']
             
-            # Calcul de la distance à vol d'oiseau entre l'origine et la destination du parcours
-            angle1, angle2, distance_eucl = geod.inv(source[source.find(',') + 1:], source[:source.find(',')],
-                                                     target[target.find(',') + 1:], target[:target.find(',')])
-            distance_eucl = int(distance_eucl)
+            # Décodage de la géométrie pour obtenir la liste des points composants la ligne
+            epa_dec = PolylineCodec().decode(epa_osrm)
+            fausse_liste = str(epa_dec)
+            ma_ligne = ogr.Geometry(ogr.wkbLineString)
+            lineAddPts = ma_ligne.AddPoint
+            
+            # Liste des coordonées des points
+            lat, long = [], []
+            latAppd, longAppd = lat.append, long.append
+            valueliste = fausse_liste[1:len(fausse_liste) - 1].split(",") 
+            # On saute le 1er et dernier caractère et on coupe aux vigules
+            for i in valueliste:  # Récupération des coordonnées latitude longitude
+                if '(' in i:
+                    latAppd(float(i[i.find('(') + 1:])/10)
+                elif ')' in i:
+                    longAppd(float(i[i.find(' ') + 1:len(i) - 1])/10)
+                else:
+                    print("Error while getting node coordinates\n")
+                    
+            for coord in zip(long, lat):  # Ajout des points à la future ligne...
+                lineAddPts(coord[0], coord[1]) # ...sous la forme x y (longitude latitude)...           
 
+            print("Processing.... {0}%".format(int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100))), end='\r')
 
-            if parsed_json['status'] is not 207:  # Verification qu'une route a bien été trouvée par OSRM
+            # Ecriture de la geométrie et des champs
+            feature = ogr.Feature(dstlayer.GetLayerDefn())  
+            feature.SetGeometry(ma_ligne)
+            feature.SetField("ID", testit)
+            feature.SetField("Total_time", total_time_osrm)
+            feature.SetField("Total_dist", total_distance_osrm)
+            feature.SetField("Dist_eucl", distance_eucl)
+            feature.SetField("Src_name", src_name)
+            feature.SetField("Tgt_name", tgt_name)
+            dstlayer.CreateFeature(feature)
+            testit += 1
 
-                # Récupération des infos intéressantes dont la géométrie au format encoded polyline algorythm
-                epa_osrm = parsed_json['route_geometry']
-                total_time_osrm = parsed_json['route_summary']['total_time']
-                total_distance_osrm = parsed_json['route_summary']['total_distance']
-
-                # Remplissage des matrices:
-                matrice_time[a][b]=total_time_osrm
-                matrice_distance[a][b]=total_distance_osrm
-                matrice_euclidian_distance[a][b]=distance_eucl
-                matrice_time_dic[src_name][tgt_name]=total_time_osrm
-                
-                # Décodage de la géométrie pour obtenir la liste des points composants la ligne
-                epa_dec = PolylineCodec().decode(epa_osrm)
-                fausse_liste = str(epa_dec)
-                ma_ligne = ogr.Geometry(ogr.wkbLineString)
-
-                # Liste des coordonées des points
-                lat = []
-                long = []
-                valueliste = fausse_liste[1:len(fausse_liste) - 1].split(
-                    ",")  # On saute le 1er et dernier caractère et on coupe aux vigules
-                for i in valueliste:  # Récupération des coordonnées latitude longitude
-                    if '(' in i:
-                        lat.append(i[i.find('(') + 1:])
-                    elif ')' in i:
-                        long.append(i[i.find(' ') + 1:len(i) - 1])
-                    else:
-                        print("Error while getting node coordinates\n")
-
-                if int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)) % 5 == 0: print(
-                    "Processing.... {0}%".format(int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100))))
-
-                for j in range(len(lat)):  # Ajout des points à la future ligne...
-                    ma_ligne.AddPoint(float(long[j]) / 10,
-                                      float(lat[j]) / 10)  # ...sous la forme x y (longitude latitude)...
-
-                feature = ogr.Feature(dstlayer.GetLayerDefn())  # ....
-
-                # Ecriture de la geométrie et des champs
-                feature.SetGeometry(ma_ligne)
-                feature.SetField("ID", testit)
-                feature.SetField("Total_time", total_time_osrm)
-                feature.SetField("Total_dist", total_distance_osrm)
-                feature.SetField("Dist_eucl", distance_eucl)
-                feature.SetField("Src_name", src_name)
-                feature.SetField("Tgt_name", tgt_name)
-                dstlayer.CreateFeature(feature)
-                testit += 1
-
-            else:
-                error += 1
-                print(
-                    "Err #{0}  : OSRM status 207 - No route found between {1} and {2}".format(error, src_name,
-                                                                                              tgt_name))
-                # Remplissage matrice en cas d'erreur:
-                matrice_time[a][b]=-1
-                matrice_distance[a][b]=-1
-                matrice_euclidian_distance[a][b]=distance_eucl
-                
+        else:
+            error += 1
+            print(
+                "Err #{0}  : OSRM status 207 - No route found between {1} and {2}".format(error, src_name,
+                                                                                          tgt_name))
     if error > 0 :
-        print("\t{0} route(s) calculations failed".format(error))
-    print("\t{0} lines created in a shapefile".format(testit))
+        print("\t{0} route calculations failed".format(error))
     feature.Destroy()
     dstfile.Destroy()
-
+    return testit
 
 def csv_to_dico_liste(file_path):
     my_dict = {}
@@ -246,14 +226,15 @@ if __name__ == '__main__':
             print("Filename error")
             sys.exit(0)
     else:
-        print("\n\nErreur lors de l'ouverture du fichier\n")
+        print("\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)        
     nom_fichier=args.csv_filename
     
     if os.path.isfile(nom_fichier) is False:
-        print("\n\nErreur lors de l'ouverture du fichier\n")
+        print("\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)
-        
+    
+    start_time=time()
     dico, liste_ord = csv_to_dico_liste(nom_fichier)
     coord_liste_t = []
 
@@ -270,10 +251,11 @@ if __name__ == '__main__':
     elif args.destinations_csv:
         dico_suite, liste_ord_d = csv_to_dico_liste(args.destinations_csv)
         dico.update(dico_suite)
-        print("\nTest Mode N-to-M\n")
-        print("{0}\n{1}\{2}\n{3}".format(dico,coord_liste_t, liste_ord_d, outfile))
+        print("\nMode N-to-M\n")
         coord_liste_t = liste_ord_d
     else:
         coord_liste_t = liste_ord
 
-    query_osrm_to_shp(dico, liste_ord, coord_liste_t, outfile)
+    nbw = query_osrm_to_shp(dico, liste_ord, coord_liste_t, outfile)
+    tt=time()-start_time
+    print('  {} features written\n{:.3f} s\n{:.2f} routes/s'.format(nbw, tt, nbw/tt))
