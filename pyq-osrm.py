@@ -179,9 +179,9 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
                      distance_eucl, src_name, tgt_name]):
                 feature.SetField(f_name, f_value)
             dstlayer.CreateFeature(feature)
-#            print("Processing.... {0}%".format(int(
-#                testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)),
-#                end='\r')
+            print("Processing.... {0}%".format(int(
+                testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)),
+                end='\r')
             testit += 1
 
         except KeyError:
