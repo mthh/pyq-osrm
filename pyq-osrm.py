@@ -1,73 +1,79 @@
 # -*-coding:utf-8 -*
+"""
+ pyq-OSRM:
 
-##    The MIT License (MIT)
-##
-##    « Copyright (c) 2015, mthh
-##
-##    Permission is hereby granted, free of charge, to any person obtaining a copy
-##    of this software and associated documentation files (the "Software"), to deal
-##    in the Software without restriction, including without limitation the rights
-##    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-##    copies of the Software, and to permit persons to whom the Software is
-##    furnished to do so, subject to the following conditions:
-##
-##    The above copyright notice and this permission notice shall be included in all
-##    copies or substantial portions of the Software.
-##
-##    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-##    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-##    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-##    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-##    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-##    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-##    SOFTWARE.
+   N to N  |
+   1 to N  | matrix of route (distance and time distance) between locations
+   N to 1  |
+   N to M  |
 
-##-----------------------------------------------------------------------------------
-## pyq-OSRM:
-##-----------------------------------------------------------------------------------
-##   N to N  |
-##   1 to N  | matrix of route (distance and time distance) between locations
-##   N to 1  |
-##   N to M  |
-##-----------------------------------------------------------------------------------
-## This script send multiple requests to an osrm local server
-## in order to build a matrice of time/route_distance/euclidian_distance
-## between a set of locations (centroid of city for example).
-##
-## The set of location must be provided in .csv (first line as headers) as:
-## Lat_column,Long_column,Name_column
-## lat,long,name_of_the_place1
-## lat,long,name_of_the_place2
-## .......
-##
-## Output is a shapefile containing the geometry of the fastest route,
-## the time in seconds, route distance in meters and euclidian
-## distance between the 2 locations in meters.
+ Send multiple requests to an osrm local server in order to build a matrice
+ of time/route_distance/euclidian_distance between a set of locations.
 
-##-----------------------------------------------------------------------------------
-## Usage :
-##   try --help to get some help
+ The set of locations must be provided in .csv (first line as headers and only
+ three columns : id, x and y in any kind of order) or a shapefile (the first
+ field will be used as an unique ID)
 
-import json
-from osgeo import ogr, osr
-from polyline.codec import PolylineCodec  # https://pypi.python.org/pypi/polyline
-import urllib.request
-import pyproj  # Python interface to PROJ.4 library
+ Output is a shapefile containing the geometry of the fastest route, the time
+ in seconds, route distance (meters) and euclidian distance (meters) between
+ each pair of locations.
+ -----------------------------------------------------------------------------
+ Usage :
+   try --help to get some help
+"""
+# The MIT License (MIT)
+#
+#    « Copyright (c) 2015, mthh
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# pylint: disable=E0611, E1101, C0325
+
 import csv
+import json
+import pyproj
 import sys
+import urllib.request
 import os.path
 from os import remove as removefile
 from time import time
+from osgeo import ogr, osr
+from polyline.codec import PolylineCodec
+
 
 def range2d(liste1, liste2):
-    for nbi, i in enumerate(liste1):
-        for nbj, j in enumerate(liste2):
-            yield nbi, i, nbj, j
+    """
+    Helped function to avoid nested loop in core code
+        and only yield the 2 requested feature
+    """
+    for ft1 in liste1:
+        for ft2 in liste2:
+            yield ft1, ft2
 
-def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
-    """Fonction qui prend en entrée un dictionnaire de {coordonnées:noms} et les listes de coordonées
-    puis envoie les requetes au serveur OSRM et enregistre le résultat dans le fichier de sortie indiqué(.shp)"""
 
+def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
+    """
+    Fonction qui prend en entrée un dictionnaire de {'coordonnées':'noms'}
+        et les listes de coordonées, envoie les requetes au serveur OSRM et
+        enregistre le résultat dans le fichier de sortie indiqué (.shp).
+    """
+    testit, error = 0, 0
     # Syst de coord. a adopter pour écrire le fichier shp
     spatialreference = osr.SpatialReference()
     spatialreference.SetWellKnownGeogCS('WGS84')
@@ -77,185 +83,275 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath):
 
     # Définition du type du fichier de sortie..
     driver = ogr.GetDriverByName("ESRI Shapefile")
-    # ..et vérification de son nom
-    if '.shp' not in dstpath[len(dstpath) - 4:]:
-        dstpath = dstpath + '.shp'
 
     try:
         if os.path.exists(dstpath):
             removefile(dstpath)
         dstfile = driver.CreateDataSource(dstpath)
         dstlayer = dstfile.CreateLayer("layer", spatialreference)
-    except:
-        print("Erreur lors de la création du fichier")
+    except Exception as err:
+        print(err, "\nErreur lors de la création du fichier")
         sys.exit(0)
+    # Ajout des champs à remplir et de leurs variables associées dans un dico
+    # qui va permettre de faire une boucle sur ces éléments et éviter
+    # de retaper ça lors de la création des champs :
+    fields = [
+        ['ID', {'type': ogr.OFTInteger, 'width': 10}],
+        ['Total_time', {'type': ogr.OFTInteger, 'width': 14}],
+        ['Total_dist', {'type': ogr.OFTInteger, 'width': 14}],
+        ['Dist_eucl', {'type': ogr.OFTInteger, 'width': 14}],
+        ['Src_name', {'type': ogr.OFTString, 'width': 120}],
+        ['Tgt_name', {'type': ogr.OFTString, 'width': 120}]
+        ]
 
-    # Ajout des champs à remplir
-    fielddef = ogr.FieldDefn("ID", ogr.OFTInteger)
-    fielddef.SetWidth(10)
-    dstlayer.CreateField(fielddef)
+    for field_name, detail in fields:
+        fielddef = ogr.FieldDefn(field_name, detail['type'])
+        fielddef.SetWidth(detail['width'])
+        dstlayer.CreateField(fielddef)
 
-    fielddef = ogr.FieldDefn("Total_time", ogr.OFTInteger)
-    fielddef.SetWidth(14)
-    dstlayer.CreateField(fielddef)
+    print("pyq-OSRM : {0} routes to calculate"
+          .format(len(coord_liste_s) * len(coord_liste_t)))
 
-    fielddef = ogr.FieldDefn("Total_dist", ogr.OFTInteger)
-    fielddef.SetWidth(14)
-    dstlayer.CreateField(fielddef)
-
-    fielddef = ogr.FieldDefn("Dist_eucl", ogr.OFTInteger)
-    fielddef.SetWidth(14)
-    dstlayer.CreateField(fielddef)
-
-    fielddef = ogr.FieldDefn("Src_name", ogr.OFTString)
-    fielddef.SetWidth(128)
-    dstlayer.CreateField(fielddef)
-
-    fielddef = ogr.FieldDefn("Tgt_name", ogr.OFTString)
-    fielddef.SetWidth(128)
-    dstlayer.CreateField(fielddef)
-
-    print("\npyq-OSRM : {0} routes to calculate".format(len(coord_liste_s) * len(coord_liste_t)))
-    testit, error = 0, 0
- 
-    for a, source, b, target in range2d(coord_liste_s, coord_liste_t):           
-        src_name = dict_coord[source]
-        tgt_name = dict_coord[target]
-        # Préparation de la requete au serveur osrm, envoi et récupération de la réponse
-        url_query = 'http://localhost:5000/viaroute?loc={0}&loc={1}&instructions=false&alt=false'.format(source, target)
+    for source, target in range2d(coord_liste_s, coord_liste_t):
+        src_name, tgt_name = dict_coord[source], dict_coord[target]
+        # Préparation et envoi de la requete puis récupération de la réponse
+        url_query = (
+            '{0}/viaroute?loc={1}&loc={2}'
+            '&instructions=false&alt=false'
+            ).format(host, source, target)
         try:
-            ajson = urllib.request.urlopen(url_query)
-        except:
-            print("\npyq-OSRM :\nErreur lors du passage de l'URL\n")
+            response = urllib.request.urlopen(url_query)
+        except Exception as err:
+            print("\npyq-OSRM :\nErreur lors du passage de l'URL\n", err)
             sys.exit(0)
 
         # Lecture des résultats (bytes) en json
-        json_entry = ajson.readall().decode('utf-8')
-        parsed_json = json.loads(json_entry)
-        
-        # Calcul de la distance à vol d'oiseau entre l'origine et la destination du parcours
-        angle1, angle2, distance_eucl = geod.inv(source[source.find(',') + 1:], source[:source.find(',')],
-                                                 target[target.find(',') + 1:], target[:target.find(',')])
-        distance_eucl = int(distance_eucl)
+        parsed_json = json.loads(response.readall().decode('utf-8'))
 
-        if parsed_json['status'] is not 207:  # Verification qu'une route a bien été trouvée par OSRM
-            # Récupération des infos intéressantes dont la géométrie au format encoded polyline algorythm
-            epa_osrm = parsed_json['route_geometry']
+        # Calcul de la distance euclidienne entre l'origine et la destination
+        _, _, distance_eucl = geod.inv(source[source.find(',') + 1:],
+                                       source[:source.find(',')],
+                                       target[target.find(',') + 1:],
+                                       target[:target.find(',')])
+
+        # Verification qu'une route a bien été trouvée par OSRM (si aucune
+        # route n'a été trouvé une exception doit être levée quand on essai
+        # de récupérer le temps total et le code erreur est lu dans le except):
+        # (ps : c'est moins couteux que de tester avec un if à chaque fois)
+        try:
+            # Récupération des infos intéressantes...
             total_time_osrm = parsed_json['route_summary']['total_time']
-            total_distance_osrm = parsed_json['route_summary']['total_distance']
-            
-            # Décodage de la géométrie pour obtenir la liste des points composants la ligne
-            epa_dec = PolylineCodec().decode(epa_osrm)
-            fausse_liste = str(epa_dec)
+            total_dist_osrm = parsed_json['route_summary']['total_distance']
+
+            # ...dont la géométrie est au format encoded polyline algorythm,
+            # à décoder pour obtenir la liste des points composant la ligne
+            # La géométrie arrive sous forme de liste, qu'on convertie en
+            # chaine de caractère (on saute le 1er et dernier caractère,
+            # les crochets) et on coupe aux vigules pour récupérer les chiffres
+            epa_dec_as_str = str(
+                PolylineCodec().decode(parsed_json['route_geometry'])
+                )[1:-1].split(",")
             ma_ligne = ogr.Geometry(ogr.wkbLineString)
-            lineAddPts = ma_ligne.AddPoint
-            
+            line_add_pts = ma_ligne.AddPoint
+
             # Liste des coordonées des points
-            lat, long = [], []
-            latAppd, longAppd = lat.append, long.append
-            valueliste = fausse_liste[1:len(fausse_liste) - 1].split(",") 
-            # On saute le 1er et dernier caractère et on coupe aux vigules
-            for i in valueliste:  # Récupération des coordonnées latitude longitude
+            lat, lon = [], []
+            lat_appd, lon_appd = lat.append, lon.append
+
+            for i in epa_dec_as_str:  # Récupération des coordonnées (lat long)
                 if '(' in i:
-                    latAppd(float(i[i.find('(') + 1:])/10)
+                    lat_appd(float(i[i.find('(') + 1:])/10)
                 elif ')' in i:
-                    longAppd(float(i[i.find(' ') + 1:len(i) - 1])/10)
+                    lon_appd(float(i[i.find(' ') + 1:len(i) - 1])/10)
                 else:
                     print("Error while getting node coordinates\n")
-                    
-            for coord in zip(long, lat):  # Ajout des points à la future ligne...
-                lineAddPts(coord[0], coord[1]) # ...sous la forme x y (longitude latitude)...           
-
-            print("Processing.... {0}%".format(int((testit / (len(coord_liste_s) * len(coord_liste_t)) * 100))), end='\r')
+            # Ajout des points à la future ligne sous la forme long lat :
+            for coord in zip(lon, lat):
+                line_add_pts(coord[0], coord[1])
 
             # Ecriture de la geométrie et des champs
-            feature = ogr.Feature(dstlayer.GetLayerDefn())  
+            feature = ogr.Feature(dstlayer.GetLayerDefn())
             feature.SetGeometry(ma_ligne)
-            feature.SetField("ID", testit)
-            feature.SetField("Total_time", total_time_osrm)
-            feature.SetField("Total_dist", total_distance_osrm)
-            feature.SetField("Dist_eucl", distance_eucl)
-            feature.SetField("Src_name", src_name)
-            feature.SetField("Tgt_name", tgt_name)
+            for f_name, f_value in zip(
+                    ['ID', 'Total_time', 'Total_dist',
+                     'Dist_eucl', 'Src_name', 'Tgt_name'],
+                    [testit, total_time_osrm, total_dist_osrm,
+                     distance_eucl, src_name, tgt_name]):
+                feature.SetField(f_name, f_value)
             dstlayer.CreateFeature(feature)
+#            print("Processing.... {0}%".format(int(
+#                testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)),
+#                end='\r')
             testit += 1
 
-        else:
+        except KeyError:
             error += 1
-            print(
-                "Err #{0}  : OSRM status 207 - No route found between {1} and {2}".format(error, src_name,
-                                                                                          tgt_name))
-    if error > 0 :
+            if parsed_json['status'] == 207:
+                print("Err #{0}  : OSRM status 207 - "
+                      "No route found between {1} and {2}"
+                      .format(error, src_name, tgt_name))
+            else:
+                print("Err #{0}  : No route found between {1} and {2}"
+                      .format(error, src_name, tgt_name))
+    if error > 0:
         print("\t{0} route calculations failed".format(error))
     feature.Destroy()
     dstfile.Destroy()
     return testit
 
-def csv_to_dico_liste(file_path):
+
+def read_row(file_path, ext):
+    """
+    Helper function to redirect to the correct way to read the input file.
+        In both case it read the input file and return two objects : a list of
+        concatenated coordinates as ['lat,long',
+                                     'lat,lon',
+                                     'lat,lon']  to feed the url query
+        and a dict (thus keeping trace of the id/name of the feature)
+    :param string file_path: The path of the file to read (both .csv and .shp
+        are accepted)
+
+    :param string ext: Extension as tree character
+        (only 'csv' and 'shp' are excepected here)
+    """
+    func_switch = {'csv': read_csv, 'shp': read_shp}
+    return func_switch[ext](file_path)
+
+
+def read_csv(file_path):
     my_dict = {}
     coord_liste = []
-    with open(file_path, 'r') as file:
-        reader = csv.reader(file)
+    with open(file_path, 'r') as opened_file:
+        reader = csv.reader(opened_file)
         try:
+            header = [i.lower() for i in next(reader)]
+            x_col = [i for i, j in enumerate(header)
+                     if ('x' in j or 'lon' in j)][0]
+            y_col = [i for i, j in enumerate(header)
+                     if ('y' in j or 'lat' in j)][0]
+            id_col = min(
+                [i for i, j in enumerate(header) if not
+                 ('y' in j and 'x' in j and 'lat' in j and 'lon' in j)]
+                )
             for row in reader:
-                if reader.line_num is not 1:
-                    concat = row[0] + ',' + row[1]
-                    coord_liste.append(concat)
-                    my_dict[concat] = row[2]
-        except csv.Error as er:
-            sys.exit('Erreur dans la lecture du fichier csv : file {}, line {}: {}'.format(file_path, reader.line_num, er))
+                concat = row[y_col] + ',' + row[x_col]
+                coord_liste.append(concat)
+                my_dict[concat] = row[id_col]
+        except csv.Error as err:
+            sys.exit('Erreur dans la lecture du fichier csv : file {}, '
+                     'line {}: {}'.format(file_path, reader.line_num, err))
     return my_dict, coord_liste
 
 
+def read_shp(file_path):
+    my_dict = {}
+    coord_liste = []
+    datasource = ogr.Open(file_path)
+    layer = datasource.GetLayer(0)
+    if layer.GetGeomType() != 1:
+        sys.exit('Input shapefile must be a Points layer\n')
+    for feature in layer:
+        concat = str(feature.geometry().GetY()) \
+            + ',' + str(feature.geometry().GetX())
+        coord_liste.append(concat)
+        my_dict[concat] = feature.GetField(0)
+
+    return my_dict, coord_liste
+
+
+def check_host(host):
+    """ Helper function to get the hostname in desired format """
+    if not ('http' in host and '//' in host) and host[len(host)-1] == '/':
+        return ''.join(['http://', host[:len(host)-1]])
+    elif not ('http' in host and '//' in host):
+        return ''.join(['http://', host])
+    elif host[len(host)-1] == '/':
+        return host[:len(host)-1]
+    else:
+        return host
+
+# pylint: disable=C0103
 if __name__ == '__main__':
     import argparse
-    parser=argparse.ArgumentParser(description="pyq-osrm :\nPython script to query local osrm server and provide output as .shp")
-    parser.add_argument(type=str, action='store', dest="csv_filename", default="", help=".csv file to open")
-    parser.add_argument('-m', '--one-to-many', dest='one_t', action='store_true', default=False,
-                        help="Calcul the fastest route between 1 source location and many destinations (default : Calcul fastest route between every locations provided in the dataset)")
-    parser.add_argument('-t', '--many-to-one', dest='many_t', action='store_true', default=False,
-                        help="Calcul the fastest route between many sources locations and 1 same destination (default : Calcul fastest route between every locations provided in the dataset)")
-    parser.add_argument('-d', '--different', dest='destinations_csv', action='store', default="",
-                        help="Different origins and destinations (put .csv file of destinations after this argument)")
-    parser.add_argument('-o', '--output', dest='out_filename', action='store', default="",
-                        help="Change output name file (default : same name as the csv)")
+    parser = argparse.ArgumentParser(
+        description="pyq-osrm :\nPython script to query local osrm server and "
+                    "return a shapefile containing the requested routes"
+        )
+    parser.add_argument(
+        type=str, action='store', dest="filename",
+        default="", help=".csv/.shp file to open"
+        )
+    parser.add_argument(
+        '-m', '--one-to-many', dest='one_t', action='store_true', default=False,
+        help="Calcul the fastest route between 1 source location and many "
+             "destinations (default : Calcul fastest route between every "
+             "locations provided in the dataset)"
+        )
+    parser.add_argument(
+        '-t', '--many-to-one', dest='many_t', action='store_true', default=False,
+        help="Calcul the fastest route between many sources locations and 1 "
+             "same destination (default : Calcul fastest route between "
+             "every locations provided in the dataset)"
+        )
+    parser.add_argument(
+        '-d', '--different', dest='destinations_csv', action='store', default="",
+        help="Different origins and destinations (put .csv / .shp file of "
+             "destinations after this argument)"
+        )
+    parser.add_argument(
+        '-o', '--output', dest='out_filename', action='store', default="",
+        help="Change output name file (default : same name as the csv)"
+        )
+    parser.add_argument(
+        '-H', '--host', dest='host', action='store', default="localhost:5000",
+        help="Change the host where is located the OSRM instance "
+             "(default : http://localhost:5000)")
+
     args = parser.parse_args()
-    
-    if args.csv_filename:
-        if '.csv' not in (str(args.csv_filename)[len(args.csv_filename)-4:]):
-            print("Filename error")
+    start_time = time()
+
+    if args.filename:
+        if '.csv' not in str(args.filename)[-4:] \
+                and '.shp' not in str(args.filename)[-4:]:
+            print("Filename error : wrong format")
+            sys.exit(0)
+        elif not os.path.isfile(args.filename):
+            print("\nErreur lors de l'ouverture du fichier\n")
             sys.exit(0)
     else:
         print("\nErreur lors de l'ouverture du fichier\n")
-        sys.exit(0)        
-    nom_fichier=args.csv_filename
-    
-    if os.path.isfile(nom_fichier) is False:
-        print("\nErreur lors de l'ouverture du fichier\n")
         sys.exit(0)
-    
-    start_time=time()
-    dico, liste_ord = csv_to_dico_liste(nom_fichier)
-    coord_liste_t = []
 
-    if args.out_filename: outfile=args.out_filename
-    else: outfile=nom_fichier[:len(args.csv_filename)-4]
-    
+    dico, liste_ord = read_row(args.filename, args.filename[-3:])
+
+    if args.out_filename:
+        outfile = args.out_filename
+        if '.shp' not in outfile[-4:]:
+            outfile = outfile + '.shp'
+    else:
+        outfile = args.filename[:-4] + '-routes.shp'
+
     if args.one_t:
-        coord_liste_t.append(liste_ord[0])
+        coord_liste_t = [liste_ord[0]]
         liste_ord, coord_liste_t = coord_liste_t, liste_ord
         print("\nMode 1-to-Many\n")
     elif args.many_t:
-        coord_liste_t.append(liste_ord[0])
+        coord_liste_t = [liste_ord[0]]
         print("\nMode Many-to-1\n")
     elif args.destinations_csv:
-        dico_suite, liste_ord_d = csv_to_dico_liste(args.destinations_csv)
+        dico_suite, cord_list_t = read_row(args.destinations_csv,
+                                           args.destinations_csv[-3:])
         dico.update(dico_suite)
         print("\nMode N-to-M\n")
-        coord_liste_t = liste_ord_d
     else:
         coord_liste_t = liste_ord
 
-    nbw = query_osrm_to_shp(dico, liste_ord, coord_liste_t, outfile)
-    tt=time()-start_time
-    print('  {} features written\n{:.3f} s\n{:.2f} routes/s'.format(nbw, tt, nbw/tt))
+    nbw = query_osrm_to_shp(
+        dico, liste_ord, coord_liste_t,
+        outfile, check_host(args.host)
+        )
+
+    tt = time()-start_time
+    print('  {} features written in {}\n{:.3f}s - {:.2f} routes/s'
+          .format(nbw, outfile, tt, nbw/tt))
+# pylint: enable=C0103,E0611, E1101, C0325
