@@ -59,7 +59,7 @@ from polyline.codec import PolylineCodec
 
 def range2d(liste1, liste2):
     """
-    Helped function to avoid nested loop in core code
+    Helper function to avoid nested loop in core code
         and only yield the 2 requested feature
     """
     for ft1 in liste1:
@@ -152,7 +152,7 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
                 PolylineCodec().decode(parsed_json['route_geometry'])
                 )[1:-1].split(",")
             ma_ligne = ogr.Geometry(ogr.wkbLineString)
-            line_add_pts = ma_ligne.AddPoint
+            line_add_pts = ma_ligne.AddPoint_2D
 
             # Liste des coordonées des points
             lat, lon = [], []
@@ -208,6 +208,7 @@ def read_row(file_path, ext):
                                      'lat,lon',
                                      'lat,lon']  to feed the url query
         and a dict (thus keeping trace of the id/name of the feature)
+
     :param string file_path: The path of the file to read (both .csv and .shp
         are accepted)
 
