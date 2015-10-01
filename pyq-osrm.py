@@ -341,7 +341,7 @@ if __name__ == '__main__':
         coord_liste_t = [liste_ord[0]]
         print("\nMode Many-to-1\n")
     elif args.destinations_csv:
-        dico_suite, cord_list_t = read_row(args.destinations_csv,
+        dico_suite, coord_liste_t = read_row(args.destinations_csv,
                                            args.destinations_csv[-3:])
         dico.update(dico_suite)
         print("\nMode N-to-M\n")
