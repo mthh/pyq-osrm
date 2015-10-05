@@ -101,8 +101,8 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
         ['Total_time', {'type': ogr.OFTInteger, 'width': 14}],
         ['Total_dist', {'type': ogr.OFTInteger, 'width': 14}],
         ['Dist_eucl', {'type': ogr.OFTInteger, 'width': 14}],
-        ['Src_name', {'type': ogr.OFTString, 'width': 120}],
-        ['Tgt_name', {'type': ogr.OFTString, 'width': 120}]
+        ['Src_name', {'type': ogr.OFTString, 'width': 80}],
+        ['Tgt_name', {'type': ogr.OFTString, 'width': 80}]
         ]
 
     for field_name, detail in fields:
@@ -138,7 +138,6 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
         # Verification qu'une route a bien été trouvée par OSRM (si aucune
         # route n'a été trouvé une exception doit être levée quand on essai
         # de récupérer le temps total et le code erreur est lu dans le except):
-        # (ps : c'est moins couteux que de tester avec un if à chaque fois)
         try:
             # Récupération des infos intéressantes...
             total_time_osrm = parsed_json['route_summary']['total_time']
@@ -146,29 +145,13 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
 
             # ...dont la géométrie est au format encoded polyline algorythm,
             # à décoder pour obtenir la liste des points composant la ligne
-            # La géométrie arrive sous forme de liste, qu'on convertie en
-            # chaine de caractère (on saute le 1er et dernier caractère,
-            # les crochets) et on coupe aux vigules pour récupérer les chiffres
-            epa_dec_as_str = str(
-                PolylineCodec().decode(parsed_json['route_geometry'])
-                )[1:-1].split(",")
+            # La géométrie arrive sous forme de liste de points (lat, lng)
+            epa_dec = PolylineCodec().decode(parsed_json['route_geometry'])
             ma_ligne = ogr.Geometry(ogr.wkbLineString)
             line_add_pts = ma_ligne.AddPoint_2D
 
-            # Liste des coordonées des points
-            lat, lon = [], []
-            lat_appd, lon_appd = lat.append, lon.append
-
-            for i in epa_dec_as_str:  # Récupération des coordonnées (lat long)
-                if '(' in i:
-                    lat_appd(float(i[i.find('(') + 1:])/10)
-                elif ')' in i:
-                    lon_appd(float(i[i.find(' ') + 1:len(i) - 1])/10)
-                else:
-                    print("Error while getting node coordinates\n")
-            # Ajout des points à la future ligne sous la forme long lat :
-            for coord in zip(lon, lat):
-                line_add_pts(coord[0], coord[1])
+            for coord in epa_dec:
+                line_add_pts(coord[1]/10.0, coord[0]/10.0)
 
             # Ecriture de la geométrie et des champs
             feature = ogr.Feature(dstlayer.GetLayerDefn())
@@ -235,6 +218,7 @@ def read_csv(file_path):
                 [i for i, j in enumerate(header) if not
                  ('y' in j and 'x' in j and 'lat' in j and 'lon' in j)]
                 )
+
             for row in reader:
                 concat = row[y_col] + ',' + row[x_col]
                 coord_liste.append(concat)
@@ -242,6 +226,9 @@ def read_csv(file_path):
         except csv.Error as err:
             sys.exit('Erreur dans la lecture du fichier csv : file {}, '
                      'line {}: {}'.format(file_path, reader.line_num, err))
+    # TODO: Vérifier que les fichiers csv ne sont pas vides (avec juste les headers)
+    if len(coord_liste) < 1:
+        sys.exit('Absence de données dans le fichier {}'.format(file_path))
     return my_dict, coord_liste
 
 
