@@ -10,6 +10,7 @@ It's a simple try to replicate the "http://localhost:5000/table?..." request (it
 Some python modules are needed :
 * Polyline
 * Gdal
+* aiohttp (only for the *asynchronous* mode)
 
 ## Installation
 > $ git clone https://github.com/mthh/pyq-osrm.git  
@@ -31,15 +32,17 @@ The script can be called like this :
 or
 > $ ./pyq-osrm.py input_file.csv -o output_file.shp
 
-This script also allow you to make only a '1-to-many' calcul. The first location in the .csv file will be the only source point and others will be all the destinations. Just add the -m parameter at the end :
+This script also allow you to make only a '1-to-many' calcul. The first location in the .csv file will be the only source point and others will be all the destinations. Just add the `-m` parameter at the end :
 >	$ ./pyq-osrm.py input_file.csv -m
 
-It is also possible to do the opposite calculation (many-to-one) by using the parameter -t :
+It is also possible to do the opposite calculation (many-to-one) by using the parameter `-t` :
 > $ ./pyq-osrm.py input_file.csv -t
 
-The operation can be done between differents origins and destinations by using the parameter -d :
+The operation can be done between differents origins and destinations by using the parameter `-d` :
 > $ ./pyq-osrm.py origins.csv -d destinations.csv -o output_file.shp
 
+In addition it is possible to use *coroutines* to fetch the result with the parameter `-a` (or `--async`) followed by the number of maximum concurrent requests :
+> $ ./pyq-osrm.py input_file.csv -o output_file.shp -a 150
 
 
 Feel free to make any comment, this script is in its very early stage of development (many errors/exeptions are probably not yet handled).
