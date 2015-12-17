@@ -54,7 +54,11 @@ import urllib.request
 import os.path
 from os import remove as removefile
 from time import time
-from osgeo import ogr, osr
+try:
+    from osgeo import ogr, osr
+except:
+    import ogr
+    import osr
 from polyline.codec import PolylineCodec
 
 
@@ -66,6 +70,32 @@ def range2d(liste1, liste2):
     for ft1 in liste1:
         for ft2 in liste2:
             yield ft1, ft2
+
+
+def async_query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t,
+                            dstpath, host, concurrent_requests):
+    """
+    Fonction qui prend en entrée un dictionnaire de {'coordonnées':'noms'}
+        et les listes de coordonées, envoie les requetes au serveur OSRM et
+        enregistre le résultat dans le fichier de sortie indiqué (.shp).
+    """
+    try:
+        from utils_pyqosrm import AsyncRoutesFetcher
+    except:
+        from .utils_pyqosrm import AsyncRoutesFetcher
+    print("pyq-OSRM : {0} routes to calculate\n..."
+          .format(len(coord_liste_s) * len(coord_liste_t)))
+
+    urls = [
+        '{0}/viaroute?loc={1}&loc={2}&instructions=false&alt=false'
+        .format(host, source, target)
+        for source, target
+        in range2d(coord_liste_s, coord_liste_t)
+        ]
+    RouteFetcher = AsyncRoutesFetcher(
+        urls, concurrent_requests, dstpath, dict_coord)
+    res = RouteFetcher.run()
+    return res
 
 
 def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
@@ -163,9 +193,9 @@ def query_osrm_to_shp(dict_coord, coord_liste_s, coord_liste_t, dstpath, host):
                      distance_eucl, src_name, tgt_name]):
                 feature.SetField(f_name, f_value)
             dstlayer.CreateFeature(feature)
-            print("Processing.... {0}%".format(int(
-                testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)),
-                end='\r')
+#            print("Processing.... {0}%".format(int(
+#                  testit / (len(coord_liste_s) * len(coord_liste_t)) * 100)),
+#                  end='\r')
             testit += 1
 
         except KeyError:
@@ -199,8 +229,7 @@ def read_row(file_path, ext):
     :param string ext: Extension as tree character
         (only 'csv' and 'shp' are excepected here)
     """
-    func_switch = {'csv': read_csv, 'shp': read_shp}
-    return func_switch[ext](file_path)
+    return {'csv': read_csv, 'shp': read_shp}[ext](file_path)
 
 
 def read_csv(file_path):
@@ -226,7 +255,6 @@ def read_csv(file_path):
         except csv.Error as err:
             sys.exit('Erreur dans la lecture du fichier csv : file {}, '
                      'line {}: {}'.format(file_path, reader.line_num, err))
-    # TODO: Vérifier que les fichiers csv ne sont pas vides (avec juste les headers)
     if len(coord_liste) < 1:
         sys.exit('Absence de données dans le fichier {}'.format(file_path))
     return my_dict, coord_liste
@@ -296,6 +324,11 @@ if __name__ == '__main__':
         help="Change the host where is located the OSRM instance "
              "(default : http://localhost:5000)")
 
+    parser.add_argument(
+        '-a', '--async', dest='concurrent_requests', action='store', default="",
+        help="Choose non-blocking asynchronous requests with this option and "
+             "set the number of maximum concurrent requests")
+
     args = parser.parse_args()
     start_time = time()
 
@@ -328,19 +361,40 @@ if __name__ == '__main__':
         coord_liste_t = [liste_ord[0]]
         print("\nMode Many-to-1\n")
     elif args.destinations_csv:
-        dico_suite, coord_liste_t = read_row(args.destinations_csv,
-                                           args.destinations_csv[-3:])
+        dico_suite, coord_liste_t = read_row(
+            args.destinations_csv, args.destinations_csv[-3:])
         dico.update(dico_suite)
         print("\nMode N-to-M\n")
     else:
         coord_liste_t = liste_ord
 
-    nbw = query_osrm_to_shp(
-        dico, liste_ord, coord_liste_t,
-        outfile, check_host(args.host)
-        )
+    if args.concurrent_requests:
+        try:
+            import aiohttp
+        except ImportError:
+            print("\nLes bibliothèques asyncio et aiohttp sont nécessaires "
+                  "pour le mode \"asynchrone\"\n")
+            sys.exit(0)
+        try:
+            concurrent_requests = int(args.concurrent_requests)
+        except:
+            print("\nLe nombre de requête simultanées "
+                  "doit être un nombre entier\n")
+            sys.exit(0)
+
+        nbw = async_query_osrm_to_shp(
+            dico, liste_ord, coord_liste_t,
+            outfile, check_host(args.host),
+            concurrent_requests
+            )
+
+    else:
+        nbw = query_osrm_to_shp(
+            dico, liste_ord, coord_liste_t,
+            outfile, check_host(args.host)
+            )
 
     tt = time()-start_time
-    print('  {} features written in {}\n{:.3f}s - {:.2f} routes/s'
+    print('  {} features written in {}\n{:.2f}s - {:.2f} routes/s'
           .format(nbw, outfile, tt, nbw/tt))
 # pylint: enable=C0103,E0611, E1101, C0325
